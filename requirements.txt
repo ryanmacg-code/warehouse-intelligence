@@ -1,0 +1,11 @@
+# MCP server runtime dependencies
+fastapi>=0.115
+uvicorn[standard]>=0.30
+mcp>=1.27
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+
+# Dev / tooling (not needed in Docker image but kept for local parity)
+flask>=3.0
+requests>=2.31
+apscheduler>=3.10
