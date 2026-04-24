@@ -113,6 +113,40 @@ async def version():
 app.mount("/mcp", _mcp_asgi)
 
 
+# ── ASGI path-normaliser ───────────────────────────────────────────────────────
+class _MCPSlashRewriter:
+    """Rewrite /mcp → /mcp/ in the ASGI scope before Starlette's Mount sees it.
+
+    Claude.ai strips trailing slashes from connector URLs, so /mcp/ becomes
+    /mcp.  Starlette's Mount responds with a 307 redirect whose Location is
+    http:// (Railway terminates TLS upstream), which Claude.ai refuses as a
+    scheme downgrade.
+
+    This rewriter normalises the path in the ASGI scope — no HTTP redirect is
+    issued.  Only the exact path /mcp is matched; query strings, all other URL
+    components, and the receive/send callables are forwarded untouched, so
+    long-lived SSE streams behave identically to a direct /mcp/ request.
+
+    Execution order: this wraps the entire FastAPI app object, so it runs
+    first — before FastAPI's middleware stack, before Starlette's Mount, and
+    before FastMCP's session manager.  Once the inner app is called and begins
+    streaming, the rewriter is no longer in the call path.
+    """
+
+    __slots__ = ("_app",)
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path") == "/mcp":
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+        await self._app(scope, receive, send)
+
+
+app = _MCPSlashRewriter(app)
+
+
 # ── Local dev entry point ──────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
