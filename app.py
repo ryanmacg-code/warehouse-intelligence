@@ -55,20 +55,18 @@ app = FastAPI(
 
 
 # ── Middleware: bind tenant ID from X-Tenant-Id header ────────────────────────
+# Phase A bridge: connectors that cannot send custom headers (e.g. Claude.ai)
+# fall back to the single Aria London tenant. Replaced by API-key auth in Session 2.
+_DEFAULT_TENANT_ID = os.environ.get(
+    "ARIA_TENANT_ID", "00000000-0000-0000-0000-000000000001"
+)
+
+
 @app.middleware("http")
 async def tenant_scoping(request: Request, call_next):
-    """Require X-Tenant-Id on every /mcp request and bind it to the context."""
+    """Bind tenant ID from X-Tenant-Id header, falling back to the default tenant."""
     if request.url.path.startswith("/mcp"):
-        tid = (request.headers.get("X-Tenant-Id") or "").strip()
-        if not tid:
-            return JSONResponse(
-                {
-                    "error": "X-Tenant-Id header is required for all MCP requests.",
-                    "code": "MISSING_TENANT_ID",
-                    "hint": "Add header: X-Tenant-Id: <tenant-uuid>",
-                },
-                status_code=400,
-            )
+        tid = (request.headers.get("X-Tenant-Id") or "").strip() or _DEFAULT_TENANT_ID
         token = tenant_id_var.set(tid)
         try:
             response = await call_next(request)
