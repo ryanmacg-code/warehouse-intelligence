@@ -6,9 +6,11 @@ Exposes:
   GET  /health     — liveness probe
   GET  /version    — service metadata
 
-Tenant scoping: every /mcp request must include an X-Tenant-Id header
-containing a valid UUID.  The value is bound to tenant_id_var (context.py)
-and read by _effective_tenant_id() inside pvx_mcp_server.py.
+Auth: every /mcp request must carry Authorization: Bearer <api_key>.
+The key is verified against api_keys (SHA-256 hash, revoked_at IS NULL) and
+the resolved tenant_id is bound to tenant_id_var (context.py), which is read
+by _effective_tenant_id() in pvx_mcp_server.py.
+/health and /version are unauthenticated (Railway health checks).
 
 Run locally:  uvicorn app:app --host 0.0.0.0 --port 8080 --reload
 Run in Docker: CMD in Dockerfile (uvicorn app:app ...)
@@ -23,7 +25,9 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from auth.api_keys import verify_and_lookup
 from context import tenant_id_var
+from db_client import get_conn
 
 # ── Version ────────────────────────────────────────────────────────────────────
 SERVICE_VERSION = "1.0.0"
@@ -54,28 +58,37 @@ app = FastAPI(
 )
 
 
-# ── Middleware: bind tenant ID from X-Tenant-Id header ────────────────────────
+# ── Middleware: API key authentication ────────────────────────────────────────
 @app.middleware("http")
-async def tenant_scoping(request: Request, call_next):
-    """Require X-Tenant-Id on every /mcp request and bind it to the context."""
-    if request.url.path.startswith("/mcp"):
-        tid = (request.headers.get("X-Tenant-Id") or "").strip()
-        if not tid:
-            return JSONResponse(
-                {
-                    "error": "X-Tenant-Id header is required for all MCP requests.",
-                    "code": "MISSING_TENANT_ID",
-                    "hint": "Add header: X-Tenant-Id: <tenant-uuid>",
-                },
-                status_code=400,
-            )
-        token = tenant_id_var.set(tid)
-        try:
-            response = await call_next(request)
-        finally:
-            tenant_id_var.reset(token)
-        return response
-    return await call_next(request)
+async def api_key_auth(request: Request, call_next):
+    """Require a valid Bearer API key on every /mcp request."""
+    if not request.url.path.startswith("/mcp"):
+        return await call_next(request)
+
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "unauthorized", "detail": "Expected Authorization: Bearer <api_key>"},
+        )
+
+    conn = get_conn()
+    try:
+        tenant_id = verify_and_lookup(auth[len("Bearer "):], conn)
+    finally:
+        conn.close()
+
+    if tenant_id is None:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "unauthorized", "detail": "Invalid or revoked API key"},
+        )
+
+    token = tenant_id_var.set(str(tenant_id))
+    try:
+        return await call_next(request)
+    finally:
+        tenant_id_var.reset(token)
 
 
 # ── Utility endpoints ──────────────────────────────────────────────────────────
