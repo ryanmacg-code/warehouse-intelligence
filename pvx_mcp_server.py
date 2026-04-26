@@ -51,7 +51,6 @@ def _effective_tenant_id() -> str:
 
 mcp = FastMCP(
     name="Aria London WMS",
-    streamable_http_path="/",
     instructions=(
         "Tools for querying the Aria London warehouse management system. "
         "Data is sourced from the canonical Supabase database, synced from Peoplevox every 15 minutes. "
