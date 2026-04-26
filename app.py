@@ -134,7 +134,7 @@ app.include_router(oauth_router)
 # FastMCP is configured with streamable_http_path="/" so its handler sits at
 # the root of the sub-app.  After Starlette strips the "/mcp" prefix, requests
 # to POST /mcp reach the handler at "/".
-app.mount("/mcp", _mcp_asgi)
+app.mount("/mcp/", _mcp_asgi)
 
 
 # ── Local dev entry point ──────────────────────────────────────────────────────
