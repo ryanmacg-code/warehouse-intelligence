@@ -31,6 +31,7 @@ WORKDIR /app
 
 # Copy only the files the server needs at runtime
 COPY app.py pvx_mcp_server.py db_client.py context.py ./
+COPY auth/ ./auth/
 
 RUN chown -R appuser:appuser /app
 USER appuser
