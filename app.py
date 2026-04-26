@@ -38,9 +38,23 @@ BUILD_TIME = datetime.now(timezone.utc).isoformat()
 # ── Import FastMCP instance (registers all tools as side-effect) ───────────────
 from pvx_mcp_server import mcp  # noqa: E402  (after load_dotenv in pvx_mcp_server)
 
-# Thin ASGI wrapper: Starlette's Mount strips "/mcp" from "/mcp", leaving path=""
-# which doesn't match the sub-app's Route("/"). Normalise "" → "/" so it matches
-# without issuing an HTTP redirect.
+# Outer ASGI middleware: Starlette's Mount regex for "/mcp/" is ^/mcp/(?P<path>.*)$
+# which requires a trailing slash. Rewrite "/mcp" → "/mcp/" in the ASGI scope
+# so the Mount matches without issuing an HTTP 307 redirect.
+class _MCPSlashNormalizer:
+    __slots__ = ("_app",)
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path") == "/mcp":
+            scope = {**scope, "path": "/mcp/", "raw_path": b"/mcp/"}
+        await self._app(scope, receive, send)
+
+
+# Inner ASGI wrapper on the sub-app: after Mount("/mcp/") strips the prefix,
+# the remaining path is "" which doesn't match Route("/"). Normalise "" → "/".
 class _MCPPathNormalizer:
     __slots__ = ("_app",)
 
@@ -147,11 +161,12 @@ async def version():
 app.include_router(oauth_router)
 
 # ── Mount MCP sub-app at /mcp ─────────────────────────────────────────────────
-# Mount at "/mcp" (no trailing slash). redirect_slashes=False on the FastAPI app
-# stops the outer router redirecting /mcp → /mcp/. _MCPPathNormalizer above
-# handles the inner case: Starlette strips "/mcp" leaving path="", which the
-# sub-app's Route("/") wouldn't match without the normalisation.
-app.mount("/mcp", _mcp_asgi)
+# _MCPSlashNormalizer (outermost ASGI layer) rewrites "/mcp" → "/mcp/" in the
+# scope before the router runs, so Mount("/mcp/") matches without a 307.
+# _MCPPathNormalizer (inner, on the sub-app) rewrites "" → "/" after the mount
+# strips the "/mcp/" prefix, so Route("/") inside the sub-app matches.
+app.add_middleware(_MCPSlashNormalizer)
+app.mount("/mcp/", _mcp_asgi)
 
 
 # ── Local dev entry point ──────────────────────────────────────────────────────
