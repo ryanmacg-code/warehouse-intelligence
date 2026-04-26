@@ -38,9 +38,24 @@ BUILD_TIME = datetime.now(timezone.utc).isoformat()
 # ── Import FastMCP instance (registers all tools as side-effect) ───────────────
 from pvx_mcp_server import mcp  # noqa: E402  (after load_dotenv in pvx_mcp_server)
 
+# Thin ASGI wrapper: Starlette's Mount strips "/mcp" from "/mcp", leaving path=""
+# which doesn't match the sub-app's Route("/"). Normalise "" → "/" so it matches
+# without issuing an HTTP redirect.
+class _MCPPathNormalizer:
+    __slots__ = ("_app",)
+
+    def __init__(self, app):
+        self._app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and not scope.get("path"):
+            scope = {**scope, "path": "/", "raw_path": b"/"}
+        await self._app(scope, receive, send)
+
+
 # Pre-create the MCP ASGI sub-app; this also initialises the session manager
 # so that mcp.session_manager is available for the lifespan below.
-_mcp_asgi = mcp.streamable_http_app()
+_mcp_asgi = _MCPPathNormalizer(mcp.streamable_http_app())
 
 # ── Lifespan: start/stop the MCP session manager with the FastAPI app ──────────
 @asynccontextmanager
@@ -57,6 +72,7 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
+    redirect_slashes=False,  # prevent Starlette 307-redirecting /mcp → /mcp/
 )
 
 
@@ -131,10 +147,11 @@ async def version():
 app.include_router(oauth_router)
 
 # ── Mount MCP sub-app at /mcp ─────────────────────────────────────────────────
-# FastMCP is configured with streamable_http_path="/" so its handler sits at
-# the root of the sub-app.  After Starlette strips the "/mcp" prefix, requests
-# to POST /mcp reach the handler at "/".
-app.mount("/mcp/", _mcp_asgi)
+# Mount at "/mcp" (no trailing slash). redirect_slashes=False on the FastAPI app
+# stops the outer router redirecting /mcp → /mcp/. _MCPPathNormalizer above
+# handles the inner case: Starlette strips "/mcp" leaving path="", which the
+# sub-app's Route("/") wouldn't match without the normalisation.
+app.mount("/mcp", _mcp_asgi)
 
 
 # ── Local dev entry point ──────────────────────────────────────────────────────
