@@ -25,7 +25,9 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from auth.api_keys import verify_and_lookup
+from auth.api_keys import verify_api_key
+from auth.oauth import verify_oauth_token
+from auth.oauth_routes import router as oauth_router
 from context import tenant_id_var
 from db_client import get_conn
 
@@ -58,10 +60,11 @@ app = FastAPI(
 )
 
 
-# ── Middleware: API key authentication ────────────────────────────────────────
+# ── Middleware: API key + OAuth token authentication ──────────────────────────
+# Exempt paths (all non-/mcp): /health, /version, /.well-known/*, /authorize, /token
 @app.middleware("http")
 async def api_key_auth(request: Request, call_next):
-    """Require a valid Bearer API key on every /mcp request."""
+    """Require a valid Bearer token on every /mcp request."""
     if not request.url.path.startswith("/mcp"):
         return await call_next(request)
 
@@ -69,19 +72,22 @@ async def api_key_auth(request: Request, call_next):
     if not auth.startswith("Bearer "):
         return JSONResponse(
             status_code=401,
-            content={"error": "unauthorized", "detail": "Expected Authorization: Bearer <api_key>"},
+            content={"error": "unauthorized", "detail": "Expected Authorization: Bearer <token>"},
         )
 
+    raw = auth[len("Bearer "):]
     conn = get_conn()
     try:
-        tenant_id = verify_and_lookup(auth[len("Bearer "):], conn)
+        tenant_id = verify_api_key(raw, conn)
+        if tenant_id is None:
+            tenant_id = verify_oauth_token(raw, conn)
     finally:
         conn.close()
 
     if tenant_id is None:
         return JSONResponse(
             status_code=401,
-            content={"error": "unauthorized", "detail": "Invalid or revoked API key"},
+            content={"error": "unauthorized", "detail": "Invalid or revoked token"},
         )
 
     token = tenant_id_var.set(str(tenant_id))
@@ -120,6 +126,9 @@ async def version():
         ],
     }
 
+
+# ── OAuth routes ──────────────────────────────────────────────────────────────
+app.include_router(oauth_router)
 
 # ── Mount MCP sub-app at /mcp ─────────────────────────────────────────────────
 # FastMCP is configured with streamable_http_path="/" so its handler sits at

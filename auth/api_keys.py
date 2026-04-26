@@ -19,7 +19,7 @@ def hash_key(plaintext: str) -> str:
     return hashlib.sha256(plaintext.encode()).hexdigest()
 
 
-def verify_and_lookup(plaintext: str, conn) -> Optional[UUID]:
+def verify_api_key(plaintext: str, conn) -> Optional[UUID]:
     """
     Hash the key, find an active row in api_keys, update last_used_at, and
     return the tenant_id UUID. Returns None if the key is missing or revoked.

@@ -4,6 +4,7 @@ uvicorn[standard]>=0.30
 mcp>=1.27
 psycopg2-binary>=2.9
 python-dotenv>=1.0
+authlib>=1.3
 
 # Dev / tooling (not needed in Docker image but kept for local parity)
 flask>=3.0
